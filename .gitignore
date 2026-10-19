@@ -1,0 +1,16 @@
+# secrets - never committed (CI uses repository secrets)
+.env
+.env.*
+!.env.example
+# local runs
+.venv/
+reports/
+explore/out/
+test-results/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+# reference material copied from Greybox runs (may hold staging data) - read locally, never pushed
+tickets/*/reference/

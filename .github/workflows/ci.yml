@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "pytest marker to run against a company (web | smoke); needs repository secrets"
+        required: false
+        default: ""
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: playwright install --with-deps chromium
+      - name: framework tests
+        run: pytest -m unit
+      - name: every test collects
+        run: pytest --collect-only -q
+
+  web:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.suite != ''
+    needs: checks
+    runs-on: ubuntu-latest
+    env:
+      QA_COMPANY: ${{ secrets.QA_COMPANY }}
+      BIZOM_WEB_URL: ${{ secrets.BIZOM_WEB_URL }}
+      BIZOM_WEB_USER: ${{ secrets.BIZOM_WEB_USER }}
+      BIZOM_WEB_PASSWORD: ${{ secrets.BIZOM_WEB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: playwright install --with-deps chromium
+      - run: pytest -m "${{ github.event.inputs.suite }} and not destructive"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reports
+          path: reports/

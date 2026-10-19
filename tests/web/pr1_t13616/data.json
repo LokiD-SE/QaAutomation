@@ -1,0 +1,4 @@
+{
+ "_about": "Per-company test data for PR1-T13616. QA records only - these tests overwrite the outlet's CST No.",
+ "stagingbatleap": {"outlet_id": "1747"}
+}
