@@ -42,11 +42,6 @@ class Evidence:
         self.files.append(path)
         return path
 
-    def web(self, page, label: str) -> Path:
-        path = self.path(label)
-        page.screenshot(path=str(path), full_page=True)
-        return path
-
     def app(self, device, label: str) -> Path:
         return device.screenshot(self.path(label))
 

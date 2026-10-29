@@ -11,30 +11,40 @@ Every ticket QA verifies in Greybox becomes repeatable automation, for web and a
 
 | Area | Choice | Why | Not chosen |
 |---|---|---|---|
-| Language / runner | Python + pytest | Greybox's run scripts, its action library and the team's ticket flow are already Python. pytest fixtures, markers and plugins (HTML, JUnit, xdist) cover what TestNG gives the Java suites, with far less ceremony. | Java + TestNG (bizomwebautomation, bizomandroid_lt): heavier, and a second language for the Greybox-to-suite flow |
-| Web | Playwright via pytest-playwright | Auto-waiting, one browser download, storage-state login reuse, screenshots on failure; the plugin supplies `page` / `browser` and the CLI options | Selenium: drivers to manage, explicit waits everywhere |
-| App | adb + `uiautomator dump`, behind `qa.app.device.Device` | No server and no on-device agent. Elements are found by text / content-desc / resource-id. A UiAutomation agent (uiautomator2 library, Appium's UiAutomator2) holds the device's automation service, so Greybox's `uiautomator dump` on the same device would fail mid-run. | Appium: a server to run, plus Java + Node toolchains; uiautomator2: holds the service. `Device` is the seam if either is ever needed (iOS, gestures). |
-| Structure | page / screen objects + fixtures + per-ticket folders | Page objects hold locators. Tests read like the case sheet. A ticket folder keeps tests, data and traceability together, and markers allow slicing by ticket, surface or role. | One folder per module: loses the link to the ticket and its defects |
+| Web: language / runner | TypeScript + Playwright Test | The team's choice (2026-10-29). Playwright Test is Playwright's own runner: fixtures, projects per browser, parallel workers, retries with traces, HTML + JUnit reporters, `--grep` on tags - nothing to bolt on. Node runs the explore script with no build step (type stripping). | pytest-playwright (the suite's first web layer, 2026-10-19): a plugin on another runner; its tests were ported one-for-one |
+| App: language / runner | Python + pytest | Greybox's run scripts, its action library and its app flows are Python; the app framework (device seam, screen objects) already existed | WebdriverIO (TypeScript): one language with the web suite, but a rewrite of the device layer and a second runner config for no gain on the device side |
+| App: driver | Appium 3 + UiAutomator2, behind `qa.app.device` (`AppiumDevice`) | Real waits and gestures, typing into the focused field, Appium Inspector for locators; the protocol device farms (BrowserStack, Sauce) speak; iOS later is the XCUITest driver, not a rewrite. Installed in the repo (`node_modules`), not globally | Playwright `_android` (experimental, Node only, no device farms); Maestro (YAML outside pytest); Espresso (needs the app's source); uiautomator2 library (Android only, no farms). Plain adb stays as `QA_APP_DRIVER=adb` |
+| Structure | page / screen objects + fixtures + per-ticket folders | Page objects hold locators. Tests read like the case sheet. A ticket folder keeps tests, data and traceability together; tags (web) and markers (app) slice by ticket, case, surface or role. | One folder per module: loses the link to the ticket and its defects |
+| Traceability | web: `tc(ticket, case)` -> tags + annotations (JUnit properties); app: `ticket()` / `case()` markers -> JUnit properties | One id scheme across both reports, the case sheet and the defect | |
 | Data | `data.json` per ticket, keyed by company | Ids differ per company (outlet 1747 exists only on stagingbatleap). The company comes from `--company`, `QA_COMPANY` or the portal host. | Data in the test: breaks the moment the company changes |
-| Secrets | `.env` (gitignored, can be a symlink to Greybox's) or CI secrets | One place, same variable names as Greybox, never copied | Per-suite copies: drift, and a second leak surface |
-| Reports | pytest-html (self-contained) + JUnit XML + an artifacts folder | Light; JUnit carries ticket / case properties for traceability; HTML opens anywhere | Allure: needs a Java CLI to render |
-| Explore | `explore/web`, `explore/app` inventory scripts | Read-only discovery of fields, selectors and screen ids before a test is written. Output goes to `explore/out/` (gitignored). | |
+| Secrets | `.env` (gitignored, can be a symlink to Greybox's) or CI secrets | One place, same variable names as Greybox, read by both suites, never copied | Per-suite copies: drift, and a second leak surface |
+| Reports | web: Playwright HTML + JUnit; app: pytest-html + JUnit; artifacts per test | Light, open anywhere, CI-readable | Allure: needs a Java CLI to render |
+| Explore | `web/explore/page-inventory.ts`, `explore/app/screen_inventory.py` | Read-only discovery of fields, selectors and screen ids before a test is written. Output goes to `explore/out/` (gitignored). | |
 
 ## Coexisting with Greybox and Claude
 
-- Own folder, own git, own `.venv`. Playwright browsers sit in the shared, versioned `~/.cache/ms-playwright`; a
-  different Playwright version installs alongside and does not replace Greybox's.
+- Own folder, own git, own `.venv`, own `node_modules` (Playwright Test, Appium and its driver). Node comes from
+  `.nvmrc` through nvm for each run; the nvm default is never changed. Playwright browsers sit in the shared,
+  versioned `~/.cache/ms-playwright`; a different Playwright version installs alongside and does not replace Greybox's.
 - Greybox touches this repo only through `qa-run automate`, which writes into it and never reads back at run time.
-- Devices: no agent is installed. A per-device lock (`reports/.locks/`) keeps two suite runs off one device. A
-  Greybox run and a suite run on the same device at the same moment still contend for the screen: pick another
-  device with `QA_DEVICE`, or run one after the other.
+- Devices: Appium's UiAutomator2 server holds the device's UI automation service while a session is open, and
+  Greybox's `uiautomator dump` fails meanwhile. Greybox and the app suite therefore never run on one device at the
+  same moment; at the end of every run the suite quits the session, force-stops `io.appium.uiautomator2.server(.test)`
+  and checks that `uiautomator dump` works again. A per-device lock (`reports/.locks/`) keeps two suite runs off one
+  device; `QA_DEVICE` picks another device.
+- adb: Appium uses the SDK in `ANDROID_HOME` (else `~/Android/Sdk`). Every adb on this machine speaks protocol
+  1.0.41, so they share one adb server and none restarts it under Greybox.
 - Logins are cached per role in `reports/.auth/` for 6 hours. The portal allows the same user in several sessions,
   so Greybox's sessions are not logged out.
 
 ## Found while building
 
-- Playwright tracing breaks the outlet form's phone widget (intl-tel-input): every save was refused with "Enter
-  valid phone number." Tracing is off by default.
+- The outlet form's phone widget (intl-tel-input) checks the stored number on load, before its utils.js arrives,
+  and leaves a valid number marked `error`; the submit handler then refuses with "Enter valid phone number." (a jQuery
+  UI dialog). Anything that slows the load - tracing, a busy staging server - made it happen more often; it was first
+  blamed on tracing. `OutletEditPage.waitPhoneChecked` waits for the library and re-runs the widget's own check.
+- The app on the shared emulator can be older than the server accepts ("Update to the version ... or higher"); the
+  `app` fixture skips with that message instead of failing.
 - The portal's flash bar is `#flash_message`, and pages carry hidden message templates. `BasePage.flash()` reads
   the first visible one.
 - Mandatory fields left empty on QA records ("Please select Outlet Attributes") block every save. Page objects fill

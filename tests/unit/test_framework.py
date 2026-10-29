@@ -1,4 +1,4 @@
-"""The framework itself - config, device parsing, evidence, page helpers. No portal, device or secret needed."""
+"""The app framework itself - config, device parsing and drivers, evidence. No portal, device or secret needed."""
 
 from __future__ import annotations
 
@@ -98,31 +98,102 @@ def test_evidence_masks_secrets_and_numbers_repeats(tmp_path, monkeypatch):
     monkeypatch.setattr(ev, "ARTIFACTS", tmp_path)
     assert mask({"user": "a", "password": "b", "nested": [{"X-Auth-Token": "t"}]}) == {
         "user": "a", "password": "***", "nested": [{"X-Auth-Token": "***"}]}
-    e = Evidence("tests/web/x.py::test_a[1]")
+    e = Evidence("tests/app/x.py::test_a[1]")
     first, second = e.path("saved"), e.path("saved")
     first.write_text("x")
     assert first.name == "saved.png" and e.path("saved").name == "saved_02.png" and second.name == "saved.png"
     assert json.loads(e.json("api", {"token": "t"}).read_text()) == {"token": "***"}
 
 
-def test_base_page_helpers_on_an_offline_page():
-    sync_api = pytest.importorskip("playwright.sync_api")
-    from qa.web.page import BasePage
+APPIUM_SOURCE = """<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy index="0" class="hierarchy" rotation="0" width="1080" height="2205">
+<android.widget.FrameLayout class="android.widget.FrameLayout" text="" content-desc="" resource-id="" bounds="[0,0][1080,2205]" clickable="false" enabled="true">
+<android.widget.EditText class="android.widget.EditText" text="Username" content-desc="" resource-id="co.bizom.apps:id/username" bounds="[40,500][1040,600]" clickable="true" enabled="true"/>
+</android.widget.FrameLayout></hierarchy>"""
 
-    with sync_api.sync_playwright() as pw:
-        try:
-            browser = pw.chromium.launch()
-        except Exception as exc:  # noqa: BLE001
-            pytest.skip(f"no chromium: {exc}")
-        page = browser.new_page()
-        page.set_content("""<label for=n>Name</label><input id=n><button>Save</button><button>Delete outlet</button>
-            <div class=alert style='display:block'>Outlet is saved</div>
-            <table><thead><tr><th>Name</th><th>CST</th></tr></thead><tbody><tr><td>QA 1</td><td>A (1)</td></tr></tbody></table>""")
-        p = BasePage(page, "https://example.test")
-        p.fill("Name", "QA 1")
-        assert page.input_value("#n") == "QA 1"
-        assert p.flash(timeout_ms=1000) == "Outlet is saved"
-        assert p.table_rows() == [{"Name": "QA 1", "CST": "A (1)"}]
-        with pytest.raises(PermissionError):
-            p.click("Delete outlet")
-        browser.close()
+
+class FakeDriver:
+    def __init__(self):
+        self.calls, self.page_source = [], APPIUM_SOURCE
+
+    def execute_script(self, name, args):
+        self.calls.append((name, args))
+
+    def find_element(self, by, selector):
+        self.calls.append(("find", selector))
+        driver = self
+
+        class Field:
+            def clear(self):
+                driver.calls.append(("clear",))
+
+            def send_keys(self, value):
+                driver.calls.append(("send_keys", value))
+        return Field()
+
+    def quit(self):
+        self.calls.append(("quit",))
+
+
+@pytest.fixture
+def appium_device(monkeypatch, tmp_path):
+    monkeypatch.setattr(dev, "LOCK_DIR", tmp_path)
+    monkeypatch.setattr(dev, "devices", lambda: ["emulator-5554"])
+    monkeypatch.setattr(dev.time, "sleep", lambda s: None)
+    shell = []
+    monkeypatch.setattr(dev.Device, "adb", lambda self, *a, binary=False, timeout=60:
+                        shell.append(a) or (b"<hierarchy></hierarchy>" if binary else ""))
+    device = dev.AppiumDevice(server_url="http://127.0.0.1:4723").acquire()
+    device.driver = FakeDriver()
+    return device, shell
+
+
+def test_appium_source_parses_like_a_uiautomator_dump():
+    nodes = dev.parse(APPIUM_SOURCE)
+    assert [n.clazz for n in nodes] == ["android.widget.FrameLayout", "android.widget.EditText"]
+    assert nodes[1].matches("username", exact=True) and nodes[1].center == (540, 550)
+
+
+def test_appium_device_taps_and_types_through_the_session(appium_device):
+    device, shell = appium_device
+    device.type("Username", "salesman1")
+    assert ("mobile: clickGesture", {"x": 540, "y": 550}) in device.driver.calls
+    assert device.driver.calls[-2:] == [("clear",), ("send_keys", "salesman1")]
+    assert not any(a[:2] == ("shell", "input tap 540 550") for a in shell)  # nothing went through adb input
+
+
+def test_appium_close_ends_the_session_and_frees_the_device_for_greybox(appium_device, tmp_path):
+    device, shell = appium_device
+    fake = device.driver
+    device.close()
+    assert ("quit",) in fake.calls and device.driver is None
+    assert [a for a in shell if a[0] == "shell"] == [("shell", f"am force-stop {p}") for p in dev.APPIUM_DEVICE_PACKAGES]
+    assert ("exec-out", "uiautomator dump /dev/tty") in shell  # checked that Greybox can read the screen again
+    dev.Device().acquire().release()  # and the lock is gone
+
+
+def test_open_device_picks_the_driver_and_checks_the_app(monkeypatch, tmp_path):
+    monkeypatch.setattr(dev, "LOCK_DIR", tmp_path)
+    monkeypatch.setattr(dev, "devices", lambda: ["emulator-5554"])
+    monkeypatch.setattr(dev.Device, "is_installed", lambda self: True)
+    started = []
+    monkeypatch.setattr(dev.AppiumDevice, "start", lambda self: started.append(self.serial) or self)
+    s = cfg.Settings(app_driver="adb")
+    plain = dev.open_device(s)
+    assert type(plain) is dev.Device
+    plain.close()
+    appium = dev.open_device(cfg.Settings())
+    assert isinstance(appium, dev.AppiumDevice) and started == ["emulator-5554"]
+    appium.release()
+    with pytest.raises(dev.DeviceError, match="QA_APP_DRIVER"):
+        dev.open_device(cfg.Settings(app_driver="espresso"))
+    monkeypatch.setattr(dev.Device, "is_installed", lambda self: False)
+    with pytest.raises(dev.DeviceError, match="not installed"):
+        dev.open_device(cfg.Settings(app_driver="adb"))
+    dev.Device().acquire().release()  # a refused open leaves no lock behind
+
+
+def test_app_driver_settings(env):
+    assert (cfg.settings("").app_driver, cfg.settings("").appium_url) == ("appium", "http://127.0.0.1:4723")
+    env.setenv("QA_APP_DRIVER", "ADB")
+    env.setenv("QA_APPIUM_URL", "http://farm.example:4444/")
+    assert (cfg.settings("").app_driver, cfg.settings("").appium_url) == ("adb", "http://farm.example:4444")

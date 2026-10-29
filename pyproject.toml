@@ -1,20 +1,19 @@
 [project]
 name = "qa-automation"
-version = "0.1.0"
-description = "Bizom web + Android automation suite, grown ticket by ticket from Greybox runs"
+version = "0.2.0"
+description = "Bizom Android app automation (pytest + Appium); the web suite is Playwright Test in web/"
 requires-python = ">=3.11"
 dependencies = [
     "pytest>=8.3",
-    "pytest-playwright>=0.6",
-    "playwright>=1.48",
     "pytest-html>=4.1",
+    "Appium-Python-Client>=5,<7",
 ]
 
 [project.optional-dependencies]
 dev = ["ruff>=0.6", "pytest-xdist>=3.6"]
 
 [tool.setuptools]
-packages = ["qa", "qa.web", "qa.app", "pages", "pages.web", "screens", "screens.app"]
+packages = ["qa", "qa.app", "screens", "screens.app"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -23,16 +22,13 @@ addopts = [
     "-ra",
     "--import-mode=importlib",
     "--strict-markers",
-    "--junitxml=reports/junit.xml",
-    "--html=reports/report.html",
+    "--junitxml=reports/app-junit.xml",
+    "--html=reports/app-report.html",
     "--self-contained-html",
-    "--screenshot=only-on-failure",
-    "--output=reports/artifacts",
 ]
 markers = [
     "unit: tests of the framework itself - no portal, device or secrets",
-    "web: drives the Bizom web portal in a browser",
-    "app: drives the Bizom Android app on an adb device",
+    "app: drives the Bizom Android app on a device (Appium, or adb with QA_APP_DRIVER=adb)",
     "smoke: quick check that the build is usable",
     "regression: part of the release regression set",
     "destructive: changes shared company settings - run only on a QA company",
@@ -45,7 +41,7 @@ filterwarnings = ["ignore::DeprecationWarning"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-extend-exclude = ["tickets/*/reference", "explore/out"]
+extend-exclude = ["tickets/*/reference", "explore/out", "node_modules"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]

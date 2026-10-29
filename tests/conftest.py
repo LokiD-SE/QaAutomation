@@ -1,14 +1,12 @@
-"""Fixtures shared by every test.
+"""Fixtures for the app tests (the web tests are Playwright Test, in web/).
 
-Web: the pytest-playwright `page` is already logged in - as the test's @pytest.mark.role (ADMIN by default) - through a
-saved storage state, so its own failure screenshots / traces keep working. `as_role("APPROVER")` gives a second
-logged-in page for multi-user flows.
-App: `app` is the locked device with the app open and logged in (`@pytest.mark.role` picks the app user).
-Missing settings or devices skip the test with the reason; they are never reported as product failures.
+`device` is the locked device for the whole run - an Appium session by default (QA_APP_DRIVER=adb for plain adb) - and
+is freed for Greybox at the end. `app` is that device with the app open and logged in (`@pytest.mark.role` picks the
+app user). Missing settings or devices skip the test with the reason; they are never reported as product failures.
 
-    pytest -m web --company stagingbatleap            # web tests against one company
-    pytest --ticket PR1-T13616                         # one ticket's tests, both surfaces
-    QA_HEADED=1 pytest tests/web/pr1_t13616 -x         # watch it
+    pytest -m app --company stagingbatleap             # app tests against one company
+    pytest --ticket PR1-T13616                          # one ticket's app tests
+    QA_APP_DRIVER=adb pytest tests/app/smoke            # without Appium
 """
 
 from __future__ import annotations
@@ -17,11 +15,10 @@ import json
 
 import pytest
 
-from qa.app.device import Device, DeviceError
+from qa.app.device import DeviceError, open_device
 from qa.app.screen import LoginScreen
 from qa.config import ConfigError, settings
 from qa.evidence import Evidence
-from qa.web.session import auth_state
 
 
 def pytest_addoption(parser):
@@ -57,56 +54,13 @@ def qa_settings(pytestconfig):
 
 
 @pytest.fixture(scope="session")
-def base_url(qa_settings, pytestconfig):
-    url = pytestconfig.getoption("base_url", default=None) or qa_settings.web_url
-    if not url:
-        pytest.skip("no portal URL: set BIZOM_WEB_URL (or BIZOM_WEB_URL_<COMPANY>) in .env")
-    return url.rstrip("/")
-
-
-@pytest.fixture
-def browser_context_args(request, browser, base_url, qa_settings):
-    """Every web test's context: logged in as its role through a cached storage state."""
-    args = {"base_url": base_url, "ignore_https_errors": True, "viewport": {"width": 1440, "height": 900}}
-    try:
-        who = qa_settings.web_login(_role(request))
-    except ConfigError as exc:
-        pytest.skip(str(exc))
-    args["storage_state"] = str(auth_state(browser, base_url, who, args))
-    return args
-
-
-@pytest.fixture
-def as_role(browser, base_url, qa_settings):
-    """as_role("APPROVER") -> a page logged in as that role, in its own context (closed after the test)."""
-    contexts = []
-
-    def make(role: str):
-        try:
-            who = qa_settings.web_login(role)
-        except ConfigError as exc:
-            pytest.skip(str(exc))
-        args = {"base_url": base_url, "ignore_https_errors": True}
-        context = browser.new_context(storage_state=str(auth_state(browser, base_url, who, args)), **args)
-        contexts.append(context)
-        return context.new_page()
-
-    yield make
-    for context in contexts:
-        context.close()
-
-
-@pytest.fixture(scope="session")
 def device(qa_settings):
     try:
-        handle = Device(qa_settings.device_serial, qa_settings.app_package).acquire()
+        handle = open_device(qa_settings)
     except DeviceError as exc:
         pytest.skip(f"app tests need a device: {exc}")
-    if not handle.is_installed():
-        handle.release()
-        pytest.skip(f"{qa_settings.app_package} is not installed on {handle.serial}")
     yield handle
-    handle.release()
+    handle.close()  # Appium: session ended, its on-device server stopped - Greybox can dump the screen again
 
 
 @pytest.fixture
@@ -117,6 +71,9 @@ def app(device, request, qa_settings):
     except ConfigError as exc:
         pytest.skip(str(exc))
     device.launch()
+    if device.has("update_required_screen") or device.has("old and unsupported version"):
+        old = next((t for t in device.texts() if "unsupported version" in t), "the installed build")
+        pytest.skip(f"the server refuses this app build - install a newer APK: {old}")
     login = LoginScreen(device)
     if login.is_open(timeout=8):
         login.login(who)
@@ -148,7 +105,7 @@ def pytest_runtest_makereport(item, call):
     if report.when != "call" or not report.failed or "app" not in item.fixturenames:
         return
     handle = item.funcargs.get("device")
-    if handle is not None:  # pytest-playwright captures the web side; the device screen is captured here
+    if handle is not None:
         try:
             shot = Evidence(item.nodeid).app(handle, "failure")
             report.sections.append(("app screenshot", str(shot)))

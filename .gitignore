@@ -4,6 +4,7 @@
 !.env.example
 # local runs
 .venv/
+node_modules/
 reports/
 explore/out/
 test-results/

@@ -3,6 +3,7 @@
     BIZOM_WEB_URL / BIZOM_WEB_USER / BIZOM_WEB_PASSWORD     default company
     BIZOM_WEB_ROLE_<ROLE>=user/password                       a login per role (spaces as underscores; n/a = none)
     BIZOM_APP_USER / BIZOM_APP_PASSWORD, BIZOM_APP_ROLE_<ROLE>
+    QA_APP_DRIVER (appium | adb), QA_APPIUM_URL, QA_DEVICE
     <any of the above>_<COMPANY>                              per-company values, picked with --company / QA_COMPANY
 
 Secrets live only in `.env` (gitignored) or CI secrets - never in the code or the test data.
@@ -52,6 +53,8 @@ class Settings:
     app_password: str = ""
     app_package: str = "co.bizom.apps"
     device_serial: str = ""
+    app_driver: str = "appium"  # appium | adb - see qa/app/device.py
+    appium_url: str = "http://127.0.0.1:4723"
     headless: bool = True
     extra: dict = field(default_factory=dict)
 
@@ -94,6 +97,8 @@ def settings(company: str | None = None) -> Settings:
     s.app_user, s.app_password = s._env("BIZOM_APP_USER"), s._env("BIZOM_APP_PASSWORD")
     s.app_package = s._env("BIZOM_APP_PACKAGE") or s.app_package
     s.device_serial = s._env("QA_DEVICE") or s._env("ANDROID_SERIAL")
+    s.app_driver = (s._env("QA_APP_DRIVER") or s.app_driver).lower()
+    s.appium_url = (s._env("QA_APPIUM_URL") or s.appium_url).rstrip("/")
     if not s.company and s.web_url:  # https://stagingbatleap.bizomstaging.in -> stagingbatleap (picks the test data)
         s.company = re.sub(r"^https?://", "", s.web_url).split(".")[0].lower()
     s.headless = (os.environ.get("QA_HEADED", "") or "0") in ("0", "", "false")

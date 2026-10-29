@@ -5,8 +5,8 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
-      suite:
-        description: "pytest marker to run against a company (web | smoke); needs repository secrets"
+      grep:
+        description: "web tests to run against a company, as a Playwright --grep (e.g. @smoke, @PR1-T13616); needs repository secrets"
         required: false
         default: ""
 
@@ -15,20 +15,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
+      - run: npm ci --no-fund --no-audit
+      - run: npx playwright install --with-deps chromium
+      - name: web - types
+        run: npx tsc --noEmit
+      - name: web - framework tests
+        run: npx playwright test --project=unit
+      - name: web - every test collects
+        run: npx playwright test --list --project=chromium
       - run: pip install -e ".[dev]"
       - run: ruff check .
-      - run: playwright install --with-deps chromium
-      - name: framework tests
+      - name: app - framework tests
         run: pytest -m unit
-      - name: every test collects
+      - name: app - every test collects
         run: pytest --collect-only -q
 
   web:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.suite != ''
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.grep != ''
     needs: checks
     runs-on: ubuntu-latest
     env:
@@ -38,15 +49,20 @@ jobs:
       BIZOM_WEB_PASSWORD: ${{ secrets.BIZOM_WEB_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
-          cache: pip
-      - run: pip install -e ".[dev]"
-      - run: playwright install --with-deps chromium
-      - run: pytest -m "${{ github.event.inputs.suite }} and not destructive"
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --no-fund --no-audit
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --project=chromium --grep "$GREP" --grep-invert @destructive
+        env:
+          GREP: ${{ github.event.inputs.grep }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: reports
-          path: reports/
+          name: web-reports
+          path: |
+            reports/web-html/
+            reports/web-junit.xml
+            reports/web-artifacts/

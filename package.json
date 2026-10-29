@@ -1,0 +1,24 @@
+{
+  "name": "qa-automation",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Bizom automation: Playwright Test (TypeScript) for the web portal, pytest + Appium for the Android app",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test:web": "playwright test --project=chromium",
+    "test:unit": "playwright test --project=unit",
+    "typecheck": "tsc --noEmit",
+    "explore:web": "node web/explore/page-inventory.ts",
+    "report": "playwright show-report reports/web-html"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^24.19.2",
+    "appium": "^3.9.0",
+    "appium-uiautomator2-driver": "^8.7.3",
+    "typescript": "^7.0.2"
+  }
+}
